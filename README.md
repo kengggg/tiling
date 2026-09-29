@@ -13,14 +13,17 @@ git clone https://github.com/kengggg/tiling.git ~/Work/tiling
 ~/Work/tiling/install.sh
 ```
 
-The clone can live anywhere. `install.sh` points `~/.config/tiling/repo` at it, then links:
+The clone can live anywhere. `install.sh` copies files into place. It does not symlink them, so moving the clone later does not break the bar.
 
-| Live path | Repo file |
-|-----------|-----------|
+| Copied to | From |
+|-----------|------|
 | `~/.aerospace.toml` | `aerospace.toml` |
-| `~/.config/sketchybar` | `sketchybar/` |
+| `~/.config/sketchybar/sketchybarrc` | `sketchybar/sketchybarrc` |
+| `~/.config/sketchybar/plugins/*.sh` | every `sketchybar/plugins/*.sh` |
 
-A real file at either path is moved to `name.bak-<timestamp>` before the link is created. Running `install.sh` again does not make another backup when the link is already correct.
+Each plugin script is marked executable, including scripts added to `plugins/` later. `sketchybarrc` is included too. It is the shell script SketchyBar runs, even though the name does not end in `.sh`.
+
+If a live file or the whole `~/.config/sketchybar` directory differs from the clone, including an old symlink, it is moved to `name.bak-<timestamp>` and then replaced. A second run that finds the same bytes does not make another backup.
 
 The installer adds these Homebrew packages only when they are missing. It does not upgrade them:
 
@@ -32,19 +35,14 @@ If windows do not tile, enable AeroSpace under **System Settings → Privacy & S
 
 ## Update another Mac
 
-Configs are symlinks, so a pull updates the live files:
+A pull updates only the clone. Copy the files into place again:
 
 ```sh
 git -C ~/Work/tiling pull --ff-only
-aerospace reload-config
-sketchybar --reload
-```
-
-If the clone was moved:
-
-```sh
 ~/Work/tiling/install.sh
 ```
+
+`install.sh` reloads AeroSpace and SketchyBar when they are already running. Moving the clone, or renaming its folder, does not affect the bar. Run `install.sh` from the new location only when you want to copy a newer version.
 
 ## Keys
 
