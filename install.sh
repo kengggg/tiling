@@ -273,9 +273,9 @@ check_bar_state() {
   local focused mode sid item expected status failed=0
   focused="$(aerospace list-workspaces --focused 2>/dev/null)" || return 1
   mode="$(aerospace list-modes --current 2>/dev/null)" || return 1
-  case "$focused" in 1|2|3|4|5) ;; *) warn "Focused workspace is outside the shared preset: $focused"; return 1 ;; esac
+  case "$focused" in 1|2|3|4|5|6|7) ;; *) warn "Focused workspace is outside the shared preset: $focused"; return 1 ;; esac
   [ -n "$mode" ] || return 1
-  for sid in 1 2 3 4 5; do
+  for sid in 1 2 3 4 5 6 7; do
     item="$(sketchybar --query "space.$sid" 2>/dev/null)" || item='{}'
     expected=off
     [ "$sid" != "$focused" ] || expected=on
@@ -295,7 +295,7 @@ check_bar_state() {
       [ "$(printf '%s' "$status" | json_value label.value)" = "$expected" ] || failed=1
   fi
   [ "$failed" -eq 0 ] || { warn "SketchyBar state does not match AeroSpace's workspace/mode."; return 1; }
-  log "All five workspace buttons, selection ($focused), and mode indicator ($mode) are correct."
+  log "All seven workspace buttons, selection ($focused), and mode indicator ($mode) are correct."
 }
 
 start_apps() {
@@ -314,7 +314,7 @@ start_apps() {
   sketchybar --reload "$LIVE_BAR/sketchybarrc" || die "SketchyBar did not load. Check brew services info sketchybar."
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
     if aerospace list-monitors >/dev/null 2>&1 && check_bar_state >/dev/null 2>&1; then
-      log "AeroSpace and all five workspace buttons are ready. Try Option-1 through Option-5."
+      log "AeroSpace and all seven workspace buttons are ready. Try Option-1 through Option-7."
       return 0
     fi
     sleep 1

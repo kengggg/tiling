@@ -291,14 +291,14 @@ ipconfig() { if [ "$2" = en1 ]; then printf 'LinkStatusActive : TRUE\n'; else re
         self.assertIn("<drawing=off>", output)
 
     def test_workspace_highlight_initializes_without_event(self):
-        output = self.plugin("aerospace.sh", 'aerospace() { if [ "$1" = list-modes ]; then printf main; else printf 3; fi; }',
-                             "NAME=space.3; unset FOCUSED_WORKSPACE", "3")
-        self.assertIn("<background.drawing=on>", output)
+        output = self.plugin("aerospace.sh", 'aerospace() { if [ "$1" = list-modes ]; then printf main; else printf 7; fi; }',
+                             "unset FOCUSED_WORKSPACE")
+        self.assertIn("<space.7><background.drawing=on>", output)
 
     def test_workspace_event_takes_precedence_over_query(self):
         output = self.plugin("aerospace.sh", 'aerospace() { if [ "$1" = list-modes ]; then printf main; else return 99; fi; }',
-                             "NAME=space.3; FOCUSED_WORKSPACE=4", "3")
-        self.assertIn("<space.4><background.drawing=on>", output)
+                             "FOCUSED_WORKSPACE=6")
+        self.assertIn("<space.6><background.drawing=on>", output)
         self.assertIn("<space.3><background.drawing=off>", output)
 
     def test_bar_quotes_plugin_paths_with_spaces(self):
@@ -314,7 +314,7 @@ source {shlex.quote(str(script))}
     def test_offline_aerospace_clears_highlight_and_shows_status(self):
         output = self.plugin("aerospace.sh", 'aerospace() { return 1; }', "unset FOCUSED_WORKSPACE")
         self.assertIn("<label=Waiting for AeroSpace>", output)
-        self.assertEqual(output.count("<background.drawing=off>"), 5)
+        self.assertEqual(output.count("<background.drawing=off>"), 7)
         self.assertNotIn("<background.drawing=on>", output)
 
     def test_service_mode_is_visible(self):
@@ -322,14 +322,14 @@ source {shlex.quote(str(script))}
         self.assertIn("<aerospace_status><drawing=on><label=SERVICE · Esc to exit>", output)
         self.assertIn("<space.2><background.drawing=on>", output)
 
-    def test_bar_builds_five_buttons_before_aerospace_is_ready(self):
+    def test_bar_builds_seven_buttons_before_aerospace_is_ready(self):
         script = ROOT / "sketchybar/sketchybarrc"
         output = self.shell(f'''aerospace() {{ return 1; }}
 sketchybar() {{ printf '<%s>' "$@"; }}
 CONFIG_DIR="$TEST_USER_DIR/.config/sketchybar"
 source {shlex.quote(str(script))}
 ''').stdout
-        for sid in range(1, 6):
+        for sid in range(1, 8):
             self.assertIn(f"<--add><item><space.{sid}><left>", output)
         self.assertIn("<update_freq=5>", output)
         self.assertIn("<aerospace_mode_change>", output)
@@ -344,23 +344,23 @@ ensure_bar_service
         self.assertFalse((self.base / "calls").exists())
 
     def bar_fixture(self, missing=None, wrong=None, mode="main", status=True):
-        for sid in range(1, 6):
+        for sid in range(1, 8):
             value = {} if sid == missing else {
                 "label": {"value": str(sid)},
                 "geometry": {"drawing": "on", "background": {
-                    "drawing": "on" if sid == (wrong or 3) else "off"}}}
+                    "drawing": "on" if sid == (wrong or 7) else "off"}}}
             (self.stage / f"space.{sid}").write_text(json.dumps(value))
         value = {"geometry": {"drawing": "off" if mode == "main" else "on"},
                  "label": {"value": mode.upper() + " · Esc to exit"}} if status else {}
         (self.stage / "aerospace_status").write_text(json.dumps(value))
-        return f'''aerospace() {{ if [ "$1" = list-modes ]; then printf {mode}; else printf 3; fi; }}
+        return f'''aerospace() {{ if [ "$1" = list-modes ]; then printf {mode}; else printf 7; fi; }}
 sketchybar() {{ cat "$WORK_DIR/$2"; }}
 check_bar_state
 '''
 
     def test_health_rejects_missing_button_despite_responding_bar(self):
-        result = self.shell(self.bar_fixture(missing=5), success=False)
-        self.assertIn("Workspace button 5", result.stderr)
+        result = self.shell(self.bar_fixture(missing=7), success=False)
+        self.assertIn("Workspace button 7", result.stderr)
 
     def test_health_rejects_stale_selection(self):
         self.shell(self.bar_fixture(wrong=2), success=False)

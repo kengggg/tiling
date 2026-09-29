@@ -13,7 +13,7 @@ else
     args+=(drawing=on "label=$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]') · Esc to exit")
 fi
 
-for sid in 1 2 3 4 5; do
+for sid in 1 2 3 4 5 6 7; do
     args+=(--set "space.$sid")
     if [ "$sid" = "$focused" ]; then
         args+=(background.drawing=on label.color=0xff1e1e2e)

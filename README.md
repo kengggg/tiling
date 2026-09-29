@@ -1,6 +1,6 @@
 # tiling
 
-The shared AeroSpace + SketchyBar setup for my Apple Silicon Macs and anyone who wants the same layout. Supports desktops and laptops running **macOS 27 or newer**. Five workspaces, Option (`alt`) shortcuts, and a Bash status bar.
+The shared AeroSpace + SketchyBar setup for my Apple Silicon Macs and anyone who wants the same layout. Supports desktops and laptops running **macOS 27 or newer**. Seven workspaces, Option (`alt`) shortcuts, and a Bash status bar.
 
 The reference machine was checked on macOS 27.0 with AeroSpace 0.21.3-Beta and SketchyBar 2.24.0. Future macOS releases are a support target; they still need testing when available. Intel Macs and Rosetta terminals are rejected before installation.
 
@@ -22,7 +22,7 @@ Setup will:
 4. Offer to install [Homebrew](https://brew.sh) if missing. Its official installer may request an administrator password and install Apple's command line tools.
 5. Install AeroSpace, SketchyBar, and Hack Nerd Font. Existing compatible packages are retained. Older dependencies require confirmation to upgrade.
 6. Copy the shared configuration, apply the agreed preferences, open AeroSpace, and start or reload SketchyBar through Homebrew services.
-7. Check that all five workspace buttons and their selected highlight match AeroSpace. Accessibility permission may still need your attention.
+7. Check that all seven workspace buttons and their selected highlight match AeroSpace. Accessibility permission may still need your attention.
 
 ### Shared macOS settings
 
@@ -45,7 +45,7 @@ The wallpaper stays behind your windows when clicked. Native edge and Option-dra
 
 Grant **AeroSpace** access in **System Settings → Privacy & Security → Accessibility** when asked, then reopen it if needed. Each Mac needs its own permission. Quit competing window managers. Arrange monitors to suit each desk; workspace assignments are not tied to monitor names.
 
-AeroSpace starts at login. **Homebrew services is SketchyBar's sole supervisor**, starting it at login and recovering it after an exit. AeroSpace sends state notifications to the bar. All five buttons are created even if AeroSpace starts later; the status item retries every five seconds and on wake. With AeroSpace unavailable, it displays “Waiting for AeroSpace”.
+AeroSpace starts at login. **Homebrew services is SketchyBar's sole supervisor**, starting it at login and recovering it after an exit. AeroSpace sends state notifications to the bar. All seven buttons are created even if AeroSpace starts later; the status item retries every five seconds and on wake. With AeroSpace unavailable, it displays “Waiting for AeroSpace”.
 
 ### Install from a clone instead
 
@@ -111,7 +111,7 @@ From the clone:
 ./install.sh --check
 ```
 
-This check makes no changes. It reports dependency versions, config conflicts or differences, the active AeroSpace config and its validation, SketchyBar's Homebrew service registration, all five workspace buttons and their current highlight, the binding-mode indicator, and shared macOS preference differences. A nonzero exit means something needs attention. From the downloaded setup, the equivalent command is:
+This check makes no changes. It reports dependency versions, config conflicts or differences, the active AeroSpace config and its validation, SketchyBar's Homebrew service registration, all seven workspace buttons and their current highlight, the binding-mode indicator, and shared macOS preference differences. A nonzero exit means something needs attention. From the downloaded setup, the equivalent command is:
 
 ```sh
 /bin/bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/kengggg/tiling/main/bootstrap.sh | /bin/bash -s -- --check'
@@ -154,8 +154,8 @@ Option (`alt`) is the modifier.
 | `alt-h`, `alt-j`, `alt-k`, `alt-l` | Focus left, down, up, right |
 | `alt-shift-h`, `alt-shift-j`, `alt-shift-k`, `alt-shift-l` | Move the window that way |
 | `alt-minus`, `alt-equal` | Shrink or grow the window |
-| `alt-1` … `alt-5` | Switch workspace |
-| `alt-shift-1` … `alt-shift-5` | Move the current window to that workspace |
+| `alt-1` … `alt-7` | Switch workspace |
+| `alt-shift-1` … `alt-shift-7` | Move the current window to that workspace |
 | `alt-tab` | Previous workspace |
 | `alt-slash` | Change tiled layout orientation |
 | `alt-comma` | Change accordion layout orientation |
@@ -165,11 +165,11 @@ Option (`alt`) is the modifier.
 
 In service mode: `esc` reloads the config and exits, `r` resets the workspace layout, and `f` toggles floating/tiling. The bar shows **SERVICE · Esc to exit**. **Option-Shift-Backspace closes every other window in the current workspace.** Plain Backspace has no close action. Each of these commands then leaves service mode.
 
-Click a workspace number on the bar to switch to it. Bindings use QWERTY key positions and may take over Option combinations used for typing special characters.
+The preset includes seven persistent workspaces. Use Option-6 or Option-7 to switch to the new ones, or Option-Shift-6/7 to move the current window there. Click a workspace number on the bar to switch to it. Bindings use QWERTY key positions and may take over Option combinations used for typing special characters.
 
 ## Bar
 
-Left: workspaces `1`–`5`, then the front app name. Right: Wi-Fi, volume, battery, clock.
+Left: workspaces `1`–`7`, then the front app name. Right: Wi-Fi, volume, battery, clock.
 
 Desktop Macs without an internal battery hide the battery item. Wi-Fi hardware is detected rather than assumed to be `en0`; its icon shows link status, with `off` when disconnected. A Mac without a Wi-Fi interface hides that item. No network name is displayed.
 

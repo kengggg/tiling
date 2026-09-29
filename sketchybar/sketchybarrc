@@ -28,9 +28,9 @@ sketchybar --add event aerospace_workspace_change
 sketchybar --add event aerospace_ready
 sketchybar --add event aerospace_mode_change
 
-# The shared preset has five persistent workspaces. Build their buttons even
+# The shared preset has seven persistent workspaces. Build their buttons even
 # when the Homebrew service starts before AeroSpace at login.
-for sid in 1 2 3 4 5; do
+for sid in 1 2 3 4 5 6 7; do
     sketchybar --add item space.$sid left \
         --set space.$sid \
             background.color=0xff89b4fa \
