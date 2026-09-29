@@ -1,6 +1,7 @@
 #!/bin/bash
 # Guided installer, compatible with macOS's bundled Bash 3.2.
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/macos-settings.sh"
 
 log() { printf '==> %s\n' "$*"; }
 warn() { printf '[!] %s\n' "$*" >&2; }
@@ -8,15 +9,18 @@ die() { warn "$*"; exit 1; }
 
 usage() {
   cat <<'HELP'
-Usage: install.sh [--replace-config] [--no-start] [--check]
+Usage: install.sh [--replace-config] [--apply-settings | --skip-settings] [--no-start] [--check]
 
   --replace-config  Back up and replace differing configurations without prompting.
-  --no-start        Skip application launch and reload commands.
+  --apply-settings  Back up and apply shared macOS preferences without prompting.
+  --skip-settings   Leave macOS preferences unchanged (health checks still report drift).
+  --no-start        Skip application launch, reload, and Dock/menu-bar restart commands.
   --check           Report installation health without changing anything.
   --help            Show this help.
 
 Existing configurations require confirmation before replacement. They are backed
-up, not merged. Homebrew installation and dependency upgrades are guided steps.
+up, not merged. Changed macOS preferences also require confirmation and are backed
+up. Homebrew installation and dependency upgrades are guided steps.
 HELP
 }
 
@@ -241,8 +245,62 @@ install_configs() {
   fi
 }
 
+json_value() { /usr/bin/plutil -extract "$1" raw -o - - 2>/dev/null; }
+
+bar_service_running() {
+  local info
+  info="$("$BREW" services info sketchybar --json 2>/dev/null)" || return 1
+  [ "$(printf '%s' "$info" | json_value 0.running)" = true ] &&
+    [ "$(printf '%s' "$info" | json_value 0.registered)" = true ]
+}
+
+ensure_bar_service() {
+  local attempt
+  if ! bar_service_running; then
+    # Remove an old registration before replacing an unmanaged bar process.
+    "$BREW" services stop sketchybar
+    pkill -u "$(id -u)" -x sketchybar 2>/dev/null || true
+    for attempt in 1 2 3 4 5; do
+      if ! pgrep -u "$(id -u)" -x sketchybar >/dev/null 2>&1; then break; fi
+      sleep 1
+    done
+    "$BREW" services start sketchybar
+  fi
+  log "Homebrew manages SketchyBar startup and recovery."
+}
+
+check_bar_state() {
+  local focused mode sid item expected status failed=0
+  focused="$(aerospace list-workspaces --focused 2>/dev/null)" || return 1
+  mode="$(aerospace list-modes --current 2>/dev/null)" || return 1
+  case "$focused" in 1|2|3|4|5) ;; *) warn "Focused workspace is outside the shared preset: $focused"; return 1 ;; esac
+  [ -n "$mode" ] || return 1
+  for sid in 1 2 3 4 5; do
+    item="$(sketchybar --query "space.$sid" 2>/dev/null)" || item='{}'
+    expected=off
+    [ "$sid" != "$focused" ] || expected=on
+    if [ "$(printf '%s' "$item" | json_value label.value)" != "$sid" ] ||
+       [ "$(printf '%s' "$item" | json_value geometry.drawing)" != on ] ||
+       [ "$(printf '%s' "$item" | json_value geometry.background.drawing)" != "$expected" ]; then
+      warn "Workspace button $sid is missing, hidden, or incorrectly highlighted (focused: $focused)."
+      failed=1
+    fi
+  done
+  status="$(sketchybar --query aerospace_status 2>/dev/null)" || status='{}'
+  if [ "$mode" = main ]; then
+    [ "$(printf '%s' "$status" | json_value geometry.drawing)" = off ] || failed=1
+  else
+    expected="$(printf '%s' "$mode" | tr '[:lower:]' '[:upper:]') · Esc to exit"
+    [ "$(printf '%s' "$status" | json_value geometry.drawing)" = on ] &&
+      [ "$(printf '%s' "$status" | json_value label.value)" = "$expected" ] || failed=1
+  fi
+  [ "$failed" -eq 0 ] || { warn "SketchyBar state does not match AeroSpace's workspace/mode."; return 1; }
+  log "All five workspace buttons, selection ($focused), and mode indicator ($mode) are correct."
+}
+
 start_apps() {
-  local attempt log_dir
+  local attempt
+  ensure_bar_service
   if aerospace list-monitors >/dev/null 2>&1; then
     aerospace reload-config --no-gui || die "AeroSpace could not load the configuration. Check its version and the backups printed above. Restart AeroSpace if its app version differs from the CLI."
   else
@@ -250,29 +308,22 @@ start_apps() {
     log "Opened AeroSpace. Allow Accessibility access when macOS asks."
   fi
   for attempt in 1 2 3 4 5; do
-    if aerospace list-monitors >/dev/null 2>&1; then break; fi
+    if sketchybar --query bar >/dev/null 2>&1; then break; fi
     sleep 1
   done
-  if ! aerospace list-monitors >/dev/null 2>&1; then
-    warn "Setup needs Accessibility access. Enable AeroSpace in System Settings → Privacy & Security → Accessibility, then reopen AeroSpace."
-    return 0
-  fi
-  if pgrep -u "$(id -u)" -x sketchybar >/dev/null 2>&1; then
-    sketchybar --reload "$LIVE_BAR/sketchybarrc"
-  else
-    log_dir="$USER_DIR/Library/Logs/tiling"
-    mkdir -p "$log_dir"
-    nohup sketchybar --config "$LIVE_BAR/sketchybarrc" >>"$log_dir/sketchybar.log" 2>&1 </dev/null &
-    log "Started SketchyBar; log: $log_dir/sketchybar.log"
-  fi
-  for attempt in 1 2 3 4 5; do
-    if sketchybar --query bar >/dev/null 2>&1; then
-      log "AeroSpace and SketchyBar are responding. Try Option-1 through Option-5."
+  sketchybar --reload "$LIVE_BAR/sketchybarrc" || die "SketchyBar did not load. Check brew services info sketchybar."
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if aerospace list-monitors >/dev/null 2>&1 && check_bar_state >/dev/null 2>&1; then
+      log "AeroSpace and all five workspace buttons are ready. Try Option-1 through Option-5."
       return 0
     fi
     sleep 1
   done
-  warn "SketchyBar has not responded yet. Run install.sh --check and inspect ~/Library/Logs/tiling/sketchybar.log."
+  if ! aerospace list-monitors >/dev/null 2>&1; then
+    warn "Setup needs Accessibility access. Enable AeroSpace in System Settings → Privacy & Security → Accessibility, then reopen AeroSpace."
+  else
+    warn "The bar has not synchronized yet. Run install.sh --check and inspect /opt/homebrew/var/log/sketchybar/."
+  fi
 }
 
 check_health() {
@@ -290,18 +341,22 @@ check_health() {
     failed=1
   fi
   if aerospace list-monitors >/dev/null 2>&1; then
-    log "Active AeroSpace configuration: $(aerospace config --config-path)"
+    path="$(aerospace config --config-path)"
+    log "Active AeroSpace configuration: $path"
+    [ "$path" = "$LIVE_AERO" ] || { warn "AeroSpace is using a different configuration."; failed=1; }
     aerospace reload-config --dry-run --no-gui || failed=1
   else
     warn "AeroSpace is not responding. Open it and grant Accessibility access."
     failed=1
   fi
-  if sketchybar --query bar >/dev/null 2>&1; then
-    log "SketchyBar is responding."
+  if bar_service_running; then
+    log "SketchyBar's Homebrew service is running and registered for login."
   else
-    warn "SketchyBar is not responding. Re-run setup or reopen AeroSpace."
+    warn "SketchyBar's Homebrew service is not running and registered. Re-run setup."
     failed=1
   fi
+  check_bar_state || failed=1
+  check_settings || failed=1
   return "$failed"
 }
 
@@ -309,9 +364,12 @@ main() {
   REPLACE_CONFIG=0
   NO_START=0
   CHECK_ONLY=0
+  SETTINGS_MODE=ask
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --replace-config) REPLACE_CONFIG=1 ;;
+      --apply-settings) SETTINGS_MODE=apply ;;
+      --skip-settings) SETTINGS_MODE=skip ;;
       --no-start) NO_START=1 ;;
       --check) CHECK_ONLY=1 ;;
       -h|--help) usage; return 0 ;;
@@ -324,6 +382,7 @@ main() {
   if [ "$CHECK_ONLY" -eq 1 ]; then check_health; return; fi
   check_source
   confirm_replacement
+  prepare_settings
   WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tiling-install.XXXXXX")"
   trap 'rm -rf "$WORK_DIR"' EXIT
   log "Installing AeroSpace, SketchyBar and Hack Nerd Font."
@@ -331,9 +390,9 @@ main() {
   install_packages
   check_versions
   install_configs
+  apply_settings
   if [ "$NO_START" -eq 0 ]; then start_apps; fi
-  log "Configuration installed. AeroSpace starts at login and starts SketchyBar."
-  log "To match the reference Mac: auto-hide the menu bar and Dock; enable 'Displays have separate Spaces'."
+  log "Configuration installed. AeroSpace starts at login; Homebrew supervises SketchyBar after setup starts it."
   log "System settings and restore instructions are in README.md. Monitor arrangement is your choice."
 }
 

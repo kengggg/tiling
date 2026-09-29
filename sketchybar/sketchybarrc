@@ -3,6 +3,7 @@
 # Put this file at: ~/.config/sketchybar/sketchybarrc
 
 PLUGIN_DIR="${CONFIG_DIR:-$HOME/.config/sketchybar}/plugins"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
 # Bar look
 sketchybar --bar \
@@ -24,10 +25,13 @@ sketchybar --default \
 
 # AeroSpace workspaces (left)
 sketchybar --add event aerospace_workspace_change
+sketchybar --add event aerospace_ready
+sketchybar --add event aerospace_mode_change
 
-for sid in $(aerospace list-workspaces --all); do
+# The shared preset has five persistent workspaces. Build their buttons even
+# when the Homebrew service starts before AeroSpace at login.
+for sid in 1 2 3 4 5; do
     sketchybar --add item space.$sid left \
-        --subscribe space.$sid aerospace_workspace_change \
         --set space.$sid \
             background.color=0xff89b4fa \
             background.corner_radius=6 \
@@ -36,9 +40,19 @@ for sid in $(aerospace list-workspaces --all); do
             label="$sid" \
             label.padding_left=8 \
             label.padding_right=8 \
-            click_script="aerospace workspace $sid" \
-            script="\"$PLUGIN_DIR/aerospace.sh\" $sid"
+            click_script="aerospace workspace $sid"
 done
+
+# One state query updates every workspace and displays non-main binding modes.
+# Polling also repairs a missed startup event or an AeroSpace restart.
+sketchybar --add item aerospace_status left \
+    --set aerospace_status \
+        icon.drawing=off \
+        label.color=0xfff9e2af \
+        label="Waiting for AeroSpace" \
+        update_freq=5 \
+        script="\"$PLUGIN_DIR/aerospace.sh\"" \
+    --subscribe aerospace_status aerospace_workspace_change aerospace_ready aerospace_mode_change system_woke
 
 # Front app name
 sketchybar --add item front_app left \

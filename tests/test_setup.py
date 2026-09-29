@@ -1,6 +1,7 @@
 """Behavioral tests. All file writes use temporary directories; apps are stubbed."""
 from pathlib import Path
 import os
+import json
 import shlex
 import shutil
 import subprocess
@@ -32,6 +33,8 @@ init_paths "$TEST_USER_DIR" "$TEST_REPO" "$TEST_XDG"
 WORK_DIR="$TEST_STAGE"
 REPLACE_CONFIG=0
 CHECK_ONLY=0
+NO_START=1
+SETTINGS_MODE=skip
 '''
 
     def shell(self, code, success=True):
@@ -185,7 +188,8 @@ check_platform
   if [ "$1" = list-monitors ]; then [ -f "$WORK_DIR/started" ]; else printf 'aerospace %s\n' "$*" >> "$TEST_LOG"; fi
 }
 open() { printf 'open %s\n' "$*" >> "$TEST_LOG"; touch "$WORK_DIR/started"; }
-pgrep() { return 0; }
+ensure_bar_service() { :; }
+check_bar_state() { return 0; }
 sketchybar() { printf 'sketchybar %s\n' "$*" >> "$TEST_LOG"; }
 sleep() { :; }
 start_apps
@@ -194,11 +198,15 @@ start_apps
         self.assertIn("open -a AeroSpace", calls)
         self.assertIn("sketchybar --reload", calls)
 
-    def test_running_aerospace_starts_missing_bar(self):
+    def test_running_aerospace_registers_missing_bar_service(self):
         self.shell('''aerospace() { printf 'aerospace %s\n' "$*" >> "$TEST_LOG"; }
 pgrep() { return 1; }
 open() { return 99; }
-nohup() { printf 'launch %s\n' "$*" >> "$TEST_LOG"; }
+BREW=brew_stub
+brew_stub() { printf 'brew %s\n' "$*" >> "$TEST_LOG"; }
+bar_service_running() { return 1; }
+pkill() { printf 'stop unmanaged\n' >> "$TEST_LOG"; }
+check_bar_state() { return 0; }
 sketchybar() { return 0; }
 sleep() { :; }
 start_apps
@@ -206,7 +214,9 @@ wait
 ''')
         calls = (self.base / "calls").read_text()
         self.assertIn("aerospace reload-config --no-gui", calls)
-        self.assertIn("launch sketchybar --config", calls)
+        self.assertIn("brew services stop sketchybar", calls)
+        self.assertIn("stop unmanaged", calls)
+        self.assertIn("brew services start sketchybar", calls)
 
     def test_main_no_start_installs_only_into_test_directories(self):
         self.shell('''eval "$(declare -f init_paths | sed '1s/init_paths/original_init_paths/')"
@@ -216,7 +226,7 @@ ensure_brew() { :; }
 install_packages() { :; }
 check_versions() { :; }
 start_apps() { printf started > "$TEST_LOG"; }
-main --no-start
+main --no-start --skip-settings
 ''')
         self.assertTrue((self.user_dir / ".aerospace.toml").exists())
         self.assertFalse((self.base / "calls").exists())
@@ -281,14 +291,15 @@ ipconfig() { if [ "$2" = en1 ]; then printf 'LinkStatusActive : TRUE\n'; else re
         self.assertIn("<drawing=off>", output)
 
     def test_workspace_highlight_initializes_without_event(self):
-        output = self.plugin("aerospace.sh", 'aerospace() { printf 3; }',
+        output = self.plugin("aerospace.sh", 'aerospace() { if [ "$1" = list-modes ]; then printf main; else printf 3; fi; }',
                              "NAME=space.3; unset FOCUSED_WORKSPACE", "3")
         self.assertIn("<background.drawing=on>", output)
 
     def test_workspace_event_takes_precedence_over_query(self):
-        output = self.plugin("aerospace.sh", 'aerospace() { return 99; }',
+        output = self.plugin("aerospace.sh", 'aerospace() { if [ "$1" = list-modes ]; then printf main; else return 99; fi; }',
                              "NAME=space.3; FOCUSED_WORKSPACE=4", "3")
-        self.assertIn("<background.drawing=off>", output)
+        self.assertIn("<space.4><background.drawing=on>", output)
+        self.assertIn("<space.3><background.drawing=off>", output)
 
     def test_bar_quotes_plugin_paths_with_spaces(self):
         script = ROOT / "sketchybar/sketchybarrc"
@@ -299,6 +310,125 @@ source {shlex.quote(str(script))}
 '''], env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f'<script="{self.user_dir}/.config/sketchybar/plugins/clock.sh">', result.stdout)
+
+    def test_offline_aerospace_clears_highlight_and_shows_status(self):
+        output = self.plugin("aerospace.sh", 'aerospace() { return 1; }', "unset FOCUSED_WORKSPACE")
+        self.assertIn("<label=Waiting for AeroSpace>", output)
+        self.assertEqual(output.count("<background.drawing=off>"), 5)
+        self.assertNotIn("<background.drawing=on>", output)
+
+    def test_service_mode_is_visible(self):
+        output = self.plugin("aerospace.sh", 'aerospace() { printf service; }', "FOCUSED_WORKSPACE=2")
+        self.assertIn("<aerospace_status><drawing=on><label=SERVICE · Esc to exit>", output)
+        self.assertIn("<space.2><background.drawing=on>", output)
+
+    def test_bar_builds_five_buttons_before_aerospace_is_ready(self):
+        script = ROOT / "sketchybar/sketchybarrc"
+        output = self.shell(f'''aerospace() {{ return 1; }}
+sketchybar() {{ printf '<%s>' "$@"; }}
+CONFIG_DIR="$TEST_USER_DIR/.config/sketchybar"
+source {shlex.quote(str(script))}
+''').stdout
+        for sid in range(1, 6):
+            self.assertIn(f"<--add><item><space.{sid}><left>", output)
+        self.assertIn("<update_freq=5>", output)
+        self.assertIn("<aerospace_mode_change>", output)
+        self.assertIn("<system_woke>", output)
+
+    def test_running_registered_service_is_not_restarted(self):
+        self.shell('''BREW=brew_stub
+brew_stub() { printf '[{"running":true,"registered":true}]'; }
+pkill() { printf unexpected > "$TEST_LOG"; }
+ensure_bar_service
+''')
+        self.assertFalse((self.base / "calls").exists())
+
+    def bar_fixture(self, missing=None, wrong=None, mode="main", status=True):
+        for sid in range(1, 6):
+            value = {} if sid == missing else {
+                "label": {"value": str(sid)},
+                "geometry": {"drawing": "on", "background": {
+                    "drawing": "on" if sid == (wrong or 3) else "off"}}}
+            (self.stage / f"space.{sid}").write_text(json.dumps(value))
+        value = {"geometry": {"drawing": "off" if mode == "main" else "on"},
+                 "label": {"value": mode.upper() + " · Esc to exit"}} if status else {}
+        (self.stage / "aerospace_status").write_text(json.dumps(value))
+        return f'''aerospace() {{ if [ "$1" = list-modes ]; then printf {mode}; else printf 3; fi; }}
+sketchybar() {{ cat "$WORK_DIR/$2"; }}
+check_bar_state
+'''
+
+    def test_health_rejects_missing_button_despite_responding_bar(self):
+        result = self.shell(self.bar_fixture(missing=5), success=False)
+        self.assertIn("Workspace button 5", result.stderr)
+
+    def test_health_rejects_stale_selection(self):
+        self.shell(self.bar_fixture(wrong=2), success=False)
+
+    def test_health_requires_mode_indicator(self):
+        self.shell(self.bar_fixture(mode="service", status=False), success=False)
+        self.shell(self.bar_fixture(mode="service"))
+        self.shell(self.bar_fixture())
+
+    def preferences_stub(self, initial):
+        state = self.base / "preferences.json"
+        state.write_text(json.dumps(initial))
+        mock = self.base / "mock_defaults.py"
+        mock.write_text('''import json, os, sys
+from pathlib import Path
+p = Path(os.environ["TEST_PREFS"])
+s = json.loads(p.read_text())
+a = sys.argv[1:]
+k = a[1] + "/" + a[2]
+if a[0] == "read":
+    if k not in s: sys.exit(1)
+    print(s[k])
+else:
+    if a[0] == "write":
+        if a[4] not in ("true", "false"): sys.exit(2)
+        s[k] = int(a[4] == "true")
+    elif a[0] == "delete": s.pop(k, None)
+    else: sys.exit(99)
+    p.write_text(json.dumps(s))
+''')
+        self.env["TEST_PREFS"] = str(state)
+        return f'''defaults() {{ python3 {shlex.quote(str(mock))} "$@"; }}
+killall() {{ printf 'restart %s\\n' "$*" >> "$TEST_LOG"; }}
+export -f defaults killall
+''', state
+
+    def test_preferences_are_backed_up_applied_repeatable_and_restorable(self):
+        original = {"com.apple.dock/expose-group-apps": 0,
+                    "com.apple.WindowManager/EnableStandardClickToShowDesktop": 1}
+        stub, state = self.preferences_stub(original)
+        self.shell(stub + "SETTINGS_MODE=apply; prepare_settings; apply_settings; check_settings")
+        values = json.loads(state.read_text())
+        self.assertEqual(values["com.apple.dock/expose-group-apps"], 1)
+        self.assertEqual(values["com.apple.WindowManager/EnableStandardClickToShowDesktop"], 0)
+        self.assertEqual(values["com.apple.WindowManager/EnableTilingByEdgeDrag"], 0)
+        self.assertFalse((self.base / "calls").exists())  # --no-start suppresses restarts
+        self.shell(stub + "SETTINGS_MODE=apply; prepare_settings; apply_settings")
+        backups = list(self.user_dir.glob(".config/tiling/*/restore.sh"))
+        self.assertEqual(len(backups), 1)
+        self.shell(stub + "/bin/bash " + shlex.quote(str(backups[0])))
+        self.assertEqual(json.loads(state.read_text()), original)
+
+    def test_preference_check_is_read_only_and_rejects_unset(self):
+        stub, state = self.preferences_stub({})
+        self.shell(stub + "check_settings", success=False)
+        self.assertEqual(json.loads(state.read_text()), {})
+
+    def test_declining_preferences_stops_before_configs_change(self):
+        stub, state = self.preferences_stub({})
+        self.shell(stub + "SETTINGS_MODE=ask; confirm() { return 1; }; prepare_settings; install_configs", success=False)
+        self.assertFalse((self.user_dir / ".aerospace.toml").exists())
+        self.assertEqual(json.loads(state.read_text()), {})
+
+    def test_unexpected_preference_type_aborts_before_any_write(self):
+        initial = {"com.apple.dock/expose-group-apps": "unexpected"}
+        stub, state = self.preferences_stub(initial)
+        self.shell(stub + "SETTINGS_NEEDED=1; apply_settings", success=False)
+        self.assertEqual(json.loads(state.read_text()), initial)
 
 
 if __name__ == "__main__":
