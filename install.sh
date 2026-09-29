@@ -65,7 +65,10 @@ ln -sfn "$REPO" "$REPO_LINK"
 log "repo pointer $REPO_LINK -> $REPO"
 
 link_one() {
-  local rel="$1" dest="$2" want="$REPO_LINK/$rel"
+  local rel dest want
+  rel="$1"
+  dest="$2"
+  want="$REPO_LINK/$rel"
   if [ "$(readlink "$dest" 2>/dev/null)" = "$want" ]; then
     log "already linked $dest"
     return 0
