@@ -1,181 +1,340 @@
-#!/usr/bin/env bash
-# Thin installer for AeroSpace + SketchyBar.
-# Assumes Homebrew is already installed. Never runs as root.
-# Copies the config into place. The running files do not point at the clone,
-# so moving the clone does not break the bar. Run this again after a pull.
-# A live file that differs is moved to name.bak-<timestamp> first.
-
+#!/bin/bash
+# Guided installer, compatible with macOS's bundled Bash 3.2.
 set -euo pipefail
 
-if [ "$(id -u)" -eq 0 ]; then
-  echo "Do not run install.sh as root." >&2
-  exit 1
-fi
+log() { printf '==> %s\n' "$*"; }
+warn() { printf '[!] %s\n' "$*" >&2; }
+die() { warn "$*"; exit 1; }
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-TS="$(date +%Y%m%d%H%M%S)"
-LIVE_AERO="$HOME/.aerospace.toml"
-LIVE_BAR="$HOME/.config/sketchybar"
+usage() {
+  cat <<'HELP'
+Usage: install.sh [--replace-config] [--no-start] [--check]
 
-log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
+  --replace-config  Back up and replace differing configurations without prompting.
+  --no-start        Skip application launch and reload commands.
+  --check           Report installation health without changing anything.
+  --help            Show this help.
 
-case "$REPO" in
-  "$LIVE_BAR"|"$LIVE_BAR"/*)
-    echo "This clone must not live inside ~/.config/sketchybar." >&2
-    exit 1
-    ;;
-esac
-
-if [ -x /opt/homebrew/bin/brew ]; then
-  BREW=/opt/homebrew/bin/brew
-elif command -v brew >/dev/null 2>&1; then
-  BREW="$(command -v brew)"
-else
-  echo "Homebrew is not installed. Install it first, or run mac-setup, then re-run this." >&2
-  exit 1
-fi
-eval "$("$BREW" shellenv)"
-
-install_cask() {
-  local token="$1" spec="$2"
-  if brew list --cask "$token" >/dev/null 2>&1; then
-    log "$token already installed"
-    return 0
-  fi
-  log "brew install --cask $spec"
-  brew install --cask "$spec"
+Existing configurations require confirmation before replacement. They are backed
+up, not merged. Homebrew installation and dependency upgrades are guided steps.
+HELP
 }
 
-install_formula() {
-  local token="$1" spec="$2"
-  if brew list "$token" >/dev/null 2>&1; then
-    log "$token already installed"
-    return 0
+confirm() {
+  local answer
+  if ! ( : </dev/tty ) 2>/dev/null; then
+    warn "An interactive terminal is needed: $1"
+    return 1
   fi
-  log "brew install $spec"
-  brew install "$spec"
+  printf '%s [y/N] ' "$1" >/dev/tty
+  IFS= read -r answer </dev/tty || return 1
+  case "$answer" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
-# A regular file with the same bytes. Symlinks are never "current".
+init_paths() {
+  USER_DIR="$1"
+  REPO="$2"
+  LIVE_AERO="$USER_DIR/.aerospace.toml"
+  LIVE_BAR="$USER_DIR/.config/sketchybar"
+  ALT_AERO="$USER_DIR/.config/aerospace/aerospace.toml"
+  XDG_AERO="${3:-$USER_DIR/.config}/aerospace/aerospace.toml"
+  case "$XDG_AERO" in /*) ;; *) die "XDG_CONFIG_HOME must be an absolute path." ;; esac
+  TS="$(date +%Y%m%d%H%M%S)"
+}
+
+check_platform() {
+  [ "$(id -u)" -ne 0 ] || die "Run this as your normal user, without sudo."
+  [ "$(uname -s)" = Darwin ] || die "This setup supports macOS only."
+  [ "$(uname -m)" = arm64 ] || die "This release supports Apple Silicon in a native terminal. Intel and Rosetta are not supported."
+  local macos_major
+  macos_major="$(sw_vers -productVersion | cut -d. -f1)"
+  [[ "$macos_major" =~ ^[0-9]+$ ]] && [ "$macos_major" -ge 27 ] || die "macOS 27 or newer is required."
+}
+
+exists() { [ -e "$1" ] || [ -L "$1" ]; }
+
 same_file() {
   [ -f "$1" ] && [ -f "$2" ] && [ ! -L "$1" ] && [ ! -L "$2" ] && cmp -s "$1" "$2"
 }
 
-plugin_scripts() {
-  local sh
-  shopt -s nullglob
-  for sh in "$REPO/sketchybar/plugins/"*.sh; do
-    printf '%s\n' "$sh"
-  done
+bar_current() {
+  [ -d "$LIVE_BAR" ] && [ ! -L "$LIVE_BAR" ] || return 1
+  # A linked directory can otherwise pass byte comparisons of its children.
+  [ -z "$(find "$LIVE_BAR" -type l -print -quit)" ] || return 1
+  diff -qr -x .DS_Store "$REPO/sketchybar" "$LIVE_BAR" >/dev/null 2>&1
 }
 
-bar_current() {
-  local sh base found=0
-  [ -d "$LIVE_BAR" ] && [ ! -L "$LIVE_BAR" ] || return 1
-  same_file "$REPO/sketchybar/sketchybarrc" "$LIVE_BAR/sketchybarrc" || return 1
-  while IFS= read -r sh; do
-    [ -n "$sh" ] || continue
-    found=1
-    base="$(basename "$sh")"
-    same_file "$sh" "$LIVE_BAR/plugins/$base" || return 1
-  done < <(plugin_scripts)
-  [ "$found" -eq 1 ] || return 1
-  shopt -s nullglob
-  for sh in "$LIVE_BAR/plugins/"*.sh; do
-    base="$(basename "$sh")"
-    [ -f "$REPO/sketchybar/plugins/$base" ] || return 1
+check_source() {
+  local sh physical_bar
+  case "$REPO" in "$LIVE_BAR"|"$LIVE_BAR"/*) die "The clone must not live inside $LIVE_BAR." ;; esac
+  if [ -d "$LIVE_BAR" ]; then
+    physical_bar="$(cd "$LIVE_BAR" && pwd -P)"
+    case "$REPO" in "$physical_bar"|"$physical_bar"/*) die "The clone must not live inside the installed bar directory." ;; esac
+  fi
+  [ -f "$REPO/aerospace.toml" ] || die "Missing aerospace.toml in $REPO."
+  [ -f "$REPO/sketchybar/sketchybarrc" ] || die "Missing sketchybarrc in $REPO."
+  [ -f "$REPO/sketchybar/plugins/aerospace.sh" ] || die "Missing SketchyBar plugins in $REPO."
+  /bin/bash -n "$REPO/sketchybar/sketchybarrc"
+  for sh in "$REPO/sketchybar/plugins/"*.sh; do /bin/bash -n "$sh"; done
+}
+
+confirm_replacement() {
+  local conflicts=0 path
+  if exists "$LIVE_AERO" && ! same_file "$REPO/aerospace.toml" "$LIVE_AERO"; then
+    warn "Different AeroSpace configuration: $LIVE_AERO"
+    conflicts=1
+  fi
+  if exists "$LIVE_BAR" && ! bar_current; then
+    warn "Different SketchyBar configuration: $LIVE_BAR (the whole directory)"
+    conflicts=1
+  fi
+  for path in "$ALT_AERO" "$XDG_AERO"; do
+    if exists "$path"; then
+      warn "Conflicting AeroSpace configuration to back up and remove: $path"
+      conflicts=1
+    fi
+    [ "$ALT_AERO" != "$XDG_AERO" ] || break
   done
-  return 0
+  if [ "$conflicts" -eq 1 ] && [ "$REPLACE_CONFIG" -ne 1 ]; then
+    confirm "Back up these configurations and replace them with the shared defaults?" || die "Cancelled. Your configurations have not been changed."
+  fi
+}
+
+find_brew() {
+  if [ -x /opt/homebrew/bin/brew ]; then
+    BREW=/opt/homebrew/bin/brew
+  elif command -v brew >/dev/null 2>&1; then
+    BREW="$(command -v brew)"
+  else
+    return 1
+  fi
+  eval "$("$BREW" shellenv)"
+}
+
+ensure_brew() {
+  if ! find_brew; then
+    log "Homebrew is required: https://brew.sh"
+    confirm "Download and run the official Homebrew installer? It may request your administrator password." || die "Install Homebrew, then run setup again."
+    curl -fL --retry 3 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o "$WORK_DIR/homebrew.sh"
+    /bin/bash "$WORK_DIR/homebrew.sh" </dev/tty
+    find_brew || die "Homebrew was not found after installation."
+  fi
+  [ "$("$BREW" --prefix)" = /opt/homebrew ] || die "This release requires native Homebrew at /opt/homebrew."
+}
+
+install_packages() {
+  if ! "$BREW" list --cask aerospace >/dev/null 2>&1; then
+    "$BREW" install --cask nikitabobko/tap/aerospace
+  fi
+  if ! "$BREW" list --formula sketchybar >/dev/null 2>&1; then
+    "$BREW" install felixkratz/formulae/sketchybar
+  fi
+  if ! "$BREW" list --cask font-hack-nerd-font >/dev/null 2>&1; then
+    "$BREW" install --cask font-hack-nerd-font
+  fi
+}
+
+version_at_least() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  awk -v actual="$1" -v minimum="$2" 'BEGIN {
+    split(actual, a, "."); split(minimum, b, ".")
+    for (i = 1; i <= 3; i++) {
+      if (a[i]+0 > b[i]+0) exit 0
+      if (a[i]+0 < b[i]+0) exit 1
+    }
+    exit 0
+  }'
+}
+
+aerospace_version() {
+  { aerospace --version 2>/dev/null || true; } | sed -nE 's/^aerospace CLI client version: ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p'
+}
+
+check_versions() {
+  local version
+  version="$(aerospace_version)"
+  if ! version_at_least "$version" 0.21.0; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      warn "AeroSpace 0.21.0-Beta or newer is required; found ${version:-unknown}."
+      return 1
+    fi
+    confirm "AeroSpace ${version:-unknown} is too old. Upgrade it with Homebrew?" || die "AeroSpace 0.21.0-Beta or newer is required. No configurations were changed."
+    "$BREW" upgrade --cask aerospace
+    version_at_least "$(aerospace_version)" 0.21.0 || die "AeroSpace is still incompatible. Check for a pinned cask or an older CLI in PATH."
+    warn "If AeroSpace is already open, quit and reopen it to use the upgraded version."
+  fi
+  command -v sketchybar >/dev/null 2>&1 || { warn "SketchyBar is missing."; return 1; }
+  version="$(sketchybar --version | sed -nE 's/^sketchybar-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+  if ! version_at_least "$version" 2.24.0; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+      warn "SketchyBar 2.24.0 or newer is required; found ${version:-unknown}."
+      return 1
+    fi
+    confirm "SketchyBar ${version:-unknown} is older than the tested baseline. Upgrade it with Homebrew?" || die "SketchyBar 2.24.0 or newer is required. No configurations were changed."
+    "$BREW" upgrade sketchybar
+    version="$(sketchybar --version | sed -nE 's/^sketchybar-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')"
+    version_at_least "$version" 2.24.0 || die "SketchyBar is still incompatible. Check for a pinned formula or an older binary in PATH."
+  fi
+  log "AeroSpace $(aerospace_version); $(sketchybar --version)"
 }
 
 backup_path() {
-  local dest="$1" target
-  if [ -L "$dest" ]; then
-    target="$(readlink "$dest")"
-    case "$target" in
-      /*) ;;
-      *) target="$(dirname "$dest")/$target" ;;
-    esac
-    # Keep a real copy of whatever the symlink still reaches. A saved symlink
-    # would dangle once the old repo pointer is removed.
-    if [ -d "$target" ]; then
-      mkdir -p "$dest.bak-$TS"
-      cp -R "$target"/. "$dest.bak-$TS"/
-      rm "$dest"
-      warn "backed up $dest -> $dest.bak-$TS"
-    elif [ -f "$target" ]; then
-      cp -p "$target" "$dest.bak-$TS"
-      rm "$dest"
-      warn "backed up $dest -> $dest.bak-$TS"
-    else
-      rm "$dest"
-      warn "removed dangling symlink $dest"
+  local dest="$1" backup suffix=0
+  LAST_BACKUP=""
+  exists "$dest" || return 0
+  backup="$dest.bak-$TS"
+  while exists "$backup"; do
+    suffix=$((suffix + 1))
+    backup="$dest.bak-$TS-$suffix"
+  done
+  # Materialize links so moving an old clone cannot invalidate the backup.
+  # Failed copies leave the live path untouched.
+  if [ -L "$dest" ] && [ ! -e "$dest" ]; then
+    ln -s "$(readlink "$dest")" "$backup" || return 1
+  elif ! cp -pRL "$dest" "$backup"; then
+    rm -rf "$backup"
+    warn "Could not back up $dest. The original is unchanged; check for broken links."
+    return 1
+  fi
+  rm -rf "$dest" || return 1
+  LAST_BACKUP="$backup"
+  warn "Backed up $dest -> $backup"
+}
+
+replace_path() {
+  local staged="$1" dest="$2"
+  backup_path "$dest" || return 1
+  if ! mv "$staged" "$dest"; then
+    if [ -n "$LAST_BACKUP" ]; then
+      mv "$LAST_BACKUP" "$dest"
+      warn "Restored $dest after installation failed."
     fi
+    return 1
+  fi
+}
+
+install_configs() {
+  local path sh
+  # Prepare complete replacements before touching existing configurations.
+  mkdir -p "$WORK_DIR/bar/plugins" "$USER_DIR/.config"
+  cp -p "$REPO/aerospace.toml" "$WORK_DIR/aerospace.toml"
+  cp -p "$REPO/sketchybar/sketchybarrc" "$WORK_DIR/bar/sketchybarrc"
+  for sh in "$REPO/sketchybar/plugins/"*.sh; do cp -p "$sh" "$WORK_DIR/bar/plugins/"; done
+  chmod +x "$WORK_DIR/bar/sketchybarrc" "$WORK_DIR/bar/plugins/"*.sh
+
+  for path in "$ALT_AERO" "$XDG_AERO"; do
+    backup_path "$path"
+    [ "$ALT_AERO" != "$XDG_AERO" ] || break
+  done
+  if same_file "$REPO/aerospace.toml" "$LIVE_AERO"; then
+    log "Already current: $LIVE_AERO"
+  else
+    replace_path "$WORK_DIR/aerospace.toml" "$LIVE_AERO"
+    log "Installed $LIVE_AERO"
+  fi
+  if bar_current; then
+    chmod +x "$LIVE_BAR/sketchybarrc" "$LIVE_BAR/plugins/"*.sh
+    log "Already current: $LIVE_BAR"
+  else
+    replace_path "$WORK_DIR/bar" "$LIVE_BAR"
+    log "Installed $LIVE_BAR"
+  fi
+}
+
+start_apps() {
+  local attempt log_dir
+  if aerospace list-monitors >/dev/null 2>&1; then
+    aerospace reload-config --no-gui || die "AeroSpace could not load the configuration. Check its version and the backups printed above. Restart AeroSpace if its app version differs from the CLI."
+  else
+    open -a AeroSpace
+    log "Opened AeroSpace. Allow Accessibility access when macOS asks."
+  fi
+  for attempt in 1 2 3 4 5; do
+    if aerospace list-monitors >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
+  if ! aerospace list-monitors >/dev/null 2>&1; then
+    warn "Setup needs Accessibility access. Enable AeroSpace in System Settings → Privacy & Security → Accessibility, then reopen AeroSpace."
     return 0
   fi
-  if [ -e "$dest" ]; then
-    mv "$dest" "$dest.bak-$TS"
-    warn "backed up $dest -> $dest.bak-$TS"
+  if pgrep -u "$(id -u)" -x sketchybar >/dev/null 2>&1; then
+    sketchybar --reload "$LIVE_BAR/sketchybarrc"
+  else
+    log_dir="$USER_DIR/Library/Logs/tiling"
+    mkdir -p "$log_dir"
+    nohup sketchybar --config "$LIVE_BAR/sketchybarrc" >>"$log_dir/sketchybar.log" 2>&1 </dev/null &
+    log "Started SketchyBar; log: $log_dir/sketchybar.log"
   fi
+  for attempt in 1 2 3 4 5; do
+    if sketchybar --query bar >/dev/null 2>&1; then
+      log "AeroSpace and SketchyBar are responding. Try Option-1 through Option-5."
+      return 0
+    fi
+    sleep 1
+  done
+  warn "SketchyBar has not responded yet. Run install.sh --check and inspect ~/Library/Logs/tiling/sketchybar.log."
 }
 
-install_plugins() {
-  local sh base
-  mkdir -p "$LIVE_BAR/plugins"
-  cp -p "$REPO/sketchybar/sketchybarrc" "$LIVE_BAR/sketchybarrc"
-  chmod +x "$LIVE_BAR/sketchybarrc"
-  while IFS= read -r sh; do
-    [ -n "$sh" ] || continue
-    base="$(basename "$sh")"
-    cp -p "$sh" "$LIVE_BAR/plugins/$base"
-    chmod +x "$LIVE_BAR/plugins/$base"
-    log "installed ~/.config/sketchybar/plugins/$base"
-  done < <(plugin_scripts)
+check_health() {
+  local failed=0 path
+  find_brew || { warn "Homebrew is missing."; return 1; }
+  check_versions || failed=1
+  for path in "$ALT_AERO" "$XDG_AERO"; do
+    if exists "$path" && exists "$LIVE_AERO"; then warn "Conflicting config: $path"; failed=1; fi
+    [ "$ALT_AERO" != "$XDG_AERO" ] || break
+  done
+  [ -f "$LIVE_AERO" ] || { warn "Missing $LIVE_AERO"; failed=1; }
+  [ -x "$LIVE_BAR/sketchybarrc" ] || { warn "Missing or non-executable $LIVE_BAR/sketchybarrc"; failed=1; }
+  if ! same_file "$REPO/aerospace.toml" "$LIVE_AERO" || ! bar_current; then
+    warn "Installed files differ from this shared setup. Re-run setup to synchronize them."
+    failed=1
+  fi
+  if aerospace list-monitors >/dev/null 2>&1; then
+    log "Active AeroSpace configuration: $(aerospace config --config-path)"
+    aerospace reload-config --dry-run --no-gui || failed=1
+  else
+    warn "AeroSpace is not responding. Open it and grant Accessibility access."
+    failed=1
+  fi
+  if sketchybar --query bar >/dev/null 2>&1; then
+    log "SketchyBar is responding."
+  else
+    warn "SketchyBar is not responding. Re-run setup or reopen AeroSpace."
+    failed=1
+  fi
+  return "$failed"
 }
 
-# Missing packages only. Already-installed packages are left at their current version.
-install_cask aerospace nikitabobko/tap/aerospace
-install_formula sketchybar felixkratz/formulae/sketchybar
-install_cask font-hack-nerd-font font-hack-nerd-font
+main() {
+  REPLACE_CONFIG=0
+  NO_START=0
+  CHECK_ONLY=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --replace-config) REPLACE_CONFIG=1 ;;
+      --no-start) NO_START=1 ;;
+      --check) CHECK_ONLY=1 ;;
+      -h|--help) usage; return 0 ;;
+      *) usage >&2; die "Unknown option: $1" ;;
+    esac
+    shift
+  done
+  check_platform
+  init_paths "$HOME" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" "${XDG_CONFIG_HOME:-$HOME/.config}"
+  if [ "$CHECK_ONLY" -eq 1 ]; then check_health; return; fi
+  check_source
+  confirm_replacement
+  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tiling-install.XXXXXX")"
+  trap 'rm -rf "$WORK_DIR"' EXIT
+  log "Installing AeroSpace, SketchyBar and Hack Nerd Font."
+  ensure_brew
+  install_packages
+  check_versions
+  install_configs
+  if [ "$NO_START" -eq 0 ]; then start_apps; fi
+  log "Configuration installed. AeroSpace starts at login and starts SketchyBar."
+  log "To match the reference Mac: auto-hide the menu bar and Dock; enable 'Displays have separate Spaces'."
+  log "System settings and restore instructions are in README.md. Monitor arrangement is your choice."
+}
 
-if same_file "$REPO/aerospace.toml" "$LIVE_AERO"; then
-  log "already current ~/.aerospace.toml"
-else
-  backup_path "$LIVE_AERO"
-  cp -p "$REPO/aerospace.toml" "$LIVE_AERO"
-  log "installed ~/.aerospace.toml"
-fi
-
-if bar_current; then
-  log "already current ~/.config/sketchybar"
-  chmod +x "$LIVE_BAR/sketchybarrc" "$LIVE_BAR/plugins/"*.sh
-else
-  backup_path "$LIVE_BAR"
-  install_plugins
-  log "installed ~/.config/sketchybar"
-fi
-
-# The old installer linked through this pointer. Copies do not use it.
-# Remove it only after backups, so a symlink backup can still read the files.
-if [ -L "$HOME/.config/tiling/repo" ]; then
-  rm "$HOME/.config/tiling/repo"
-  rmdir "$HOME/.config/tiling" 2>/dev/null || true
-  log "removed the old repo pointer ~/.config/tiling/repo"
-fi
-
-if aerospace list-monitors >/dev/null 2>&1; then
-  aerospace reload-config
-  log "reloaded AeroSpace"
-else
-  warn "AeroSpace is not running yet. Open it, or log out and back in."
-fi
-
-if pgrep -x sketchybar >/dev/null 2>&1; then
-  /opt/homebrew/bin/sketchybar --reload
-  log "reloaded SketchyBar"
-else
-  warn "SketchyBar is not running yet. AeroSpace starts it on launch."
-fi
-
-warn "If windows do not tile, enable AeroSpace under System Settings → Privacy & Security → Accessibility, then log out and back in."
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

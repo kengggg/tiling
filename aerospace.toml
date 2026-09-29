@@ -5,12 +5,12 @@ auto-reload-config = true
 persistent-workspaces = ["1", "2", "3", "4", "5"]
 
 after-startup-command = [
-    'exec-and-forget sketchybar'
+    'exec-and-forget sketchybar --config "$HOME/.config/sketchybar/sketchybarrc"'
 ]
 
 exec-on-workspace-change = [
     '/bin/bash', '-c',
-    '/opt/homebrew/bin/sketchybar --trigger aerospace_workspace_change FOCUSED_WORKSPACE=$AEROSPACE_FOCUSED_WORKSPACE'
+    'sketchybar --trigger aerospace_workspace_change FOCUSED_WORKSPACE="$AEROSPACE_FOCUSED_WORKSPACE"'
 ]
 
 enable-normalization-flatten-containers = true

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# A forced update after startup/reload has no custom event environment.
+FOCUSED_WORKSPACE="${FOCUSED_WORKSPACE:-$(aerospace list-workspaces --focused 2>/dev/null)}"
+
 if [ "$1" = "$FOCUSED_WORKSPACE" ]; then
     sketchybar --set "$NAME" \
         background.drawing=on \

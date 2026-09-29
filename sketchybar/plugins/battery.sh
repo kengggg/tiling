@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 
-PERCENT="$(pmset -g batt | grep -Eo '[0-9]+%' | head -1 | tr -d '%')"
-CHARGING="$(pmset -g batt | grep 'AC Power')"
+BATTERY="$(pmset -g batt)"
+PERCENT="$(printf '%s\n' "$BATTERY" | grep -Eo '[0-9]+%' | head -1 | tr -d '%')"
+
+# Desktop Macs have no internal battery. Do not show an empty percentage.
+if [ -z "$PERCENT" ]; then
+    sketchybar --set "$NAME" drawing=off
+    exit 0
+fi
+
+CHARGING="$(printf '%s\n' "$BATTERY" | grep 'AC Power')"
 
 if [ -n "$CHARGING" ]; then
     ICON=""
@@ -17,4 +25,4 @@ else
     ICON=""
 fi
 
-sketchybar --set "$NAME" icon="$ICON" label="${PERCENT}%"
+sketchybar --set "$NAME" drawing=on icon="$ICON" label="${PERCENT}%"
