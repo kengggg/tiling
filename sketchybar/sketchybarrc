@@ -75,6 +75,10 @@ sketchybar --add item battery right \
 
 sketchybar --add item volume right \
     --set volume \
+        icon.font="Hack Nerd Font Mono:Regular:14.0" \
+        icon.width=20 \
+        icon.align=center \
+        icon.padding_right=6 \
         script="\"$PLUGIN_DIR/volume.sh\"" \
     --subscribe volume volume_change
 
